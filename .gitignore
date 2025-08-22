@@ -7,14 +7,11 @@
 
 # R Markdown cache and output
 *_cache/
-*_files/
-*.html
-*.pdf
 
-# Data files (optional - remove if you want to include the datasets)
-*.csv
-*.rds
-*.RData
+# Data files - keeping the important ones for the course
+# *.csv  # Commented out to include dataset files
+# *.rds  # Commented out to include R data files if needed
+# *.RData  # Commented out to include R data files if needed
 
 # Python
 __pycache__/
