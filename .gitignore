@@ -1,0 +1,50 @@
+# R specific files
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+*.Rproj.user/
+
+# R Markdown cache and output
+*_cache/
+*_files/
+*.html
+*.pdf
+
+# Data files (optional - remove if you want to include the datasets)
+*.csv
+*.rds
+*.RData
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log

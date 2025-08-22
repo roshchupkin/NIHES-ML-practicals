@@ -1,0 +1,479 @@
+---
+title: "Supervised Learning Practical 2: Cross-Validation"
+author: "Machine Learning for Health Research — Teaching Materials"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    df_print: paged
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# Learning Objectives
+
+By the end of this practical you will be able to:
+
+1.  **Explain the limitations of a single train/test split** -
+    Understand why one split isn't enough for reliable model evaluation
+2.  **Configure and run *k*-fold cross-validation** - Learn how to set
+    up robust model validation using the **caret** package
+3.  **Train and compare multiple models** - Practice training different
+    algorithms on the same resampling splits for fair comparison
+4.  **Evaluate models using ROC AUC** - Learn when and how to use ROC
+    AUC for imbalanced data (Optional)
+
+# Setup
+
+```{r setup, include=FALSE}
+# Global chunk options for consistent output formatting
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Set random seed for reproducibility
+# This ensures that all random processes (data splitting, model training) 
+# produce the same results every time you run the code
+set.seed(42)  # Reproducibility across chunks
+```
+
+## Load Libraries and Data
+
+```{r libraries-and-data}
+# ============================================================================
+# LOADING REQUIRED LIBRARIES
+# ============================================================================
+# tidyverse: Collection of R packages for data science (includes ggplot2, dplyr, etc.)
+library(tidyverse)
+
+# caret: Classification And REgression Training - main package for ML workflows
+# Provides unified interface for training and evaluating models
+library(caret)
+
+# rpart: Recursive Partitioning and Regression Trees
+# This is the engine that caret uses when method = "rpart"
+library(rpart)         
+
+# randomForest: Implementation of Random Forest algorithm
+# This is the engine that caret uses when method = "rf"
+library(randomForest)  
+
+# ============================================================================
+# DATA LOADING AND PREPARATION
+# ============================================================================
+# Load the cleaned dataset
+# Ensure 'data_cleaned.csv' is in your working directory.
+# If not, set the working directory with setwd("/path/to/dir").
+df <- readr::read_csv("data_cleaned.csv")
+
+# ============================================================================
+# DATA TYPE CONVERSION FOR CLASSIFICATION
+# ============================================================================
+# Convert diabetes variable to factor (categorical variable)
+# This is CRUCIAL for classification tasks in R
+# Factors tell R that this is a categorical variable, not numeric
+df$diabetes <- as.factor(df$diabetes)
+
+# ============================================================================
+# EXPLORATORY DATA ANALYSIS (EDA)
+# ============================================================================
+# Quick sanity checks to understand your data structure
+head(df)  # View first 6 rows
+# glimpse(df)  # Detailed view of data structure (uncomment if needed)
+# summary(df$diabetes)  # Summary statistics (uncomment if needed)
+
+# ============================================================================
+# CLASS BALANCE ASSESSMENT
+# ============================================================================
+# Check class balance - this is CRITICAL for choosing evaluation metrics
+# If classes are imbalanced, accuracy can be misleading
+table(df$diabetes)  # Count of each class
+prop.table(table(df$diabetes))  # Proportions of each class
+
+# INTERPRETATION:
+# - If proportions are close to 50/50: Accuracy is fine
+# - If one class is rare (< 20%): Consider ROC AUC instead of Accuracy
+```
+
+## Train/Test Split vs Cross-Validation (Concept)
+
+> **Why not rely on a single split?**\
+>
+> **THEORETICAL BACKGROUND:**
+>
+> A single train/test partition can give a **noisy estimate** of model
+> performance, especially with: - **Small samples**: Limited data means
+> high variance in performance estimates - **Rare outcomes**: Imbalanced
+> classes make single splits unreliable - **Random variation**:
+> Different splits can give very different results
+>
+> **CROSS-VALIDATION SOLUTION:**
+>
+> Cross-validation repeats the "fit & validate" process across *k*
+> different folds and averages the results. This: - **Reduces variance**
+> of the performance estimate - **Provides confidence intervals** for
+> model performance - **Ensures fair comparison** between models -
+> **Helps detect overfitting** by comparing training vs validation
+> performance
+>
+> **HOW K-FOLD CV WORKS:** 1. Data is split into k equal parts (folds)
+> 2. Model is trained on k-1 folds, tested on 1 fold 3. This is repeated
+> k times, each fold serving as test set once 4. Results are averaged
+> across all k iterations
+
+# Cross-Validation Configuration
+
+```{r cv-config}
+# ============================================================================
+# CONFIGURING CROSS-VALIDATION PARAMETERS
+# ============================================================================
+# Create a trainControl object that defines the resampling method
+# This object tells caret HOW to perform cross-validation
+
+train_control <- trainControl(
+  method = "cv",    # Method: "cv" = k-fold cross-validation
+  number = 5        # Number of folds (k = 5)
+)
+
+# ============================================================================
+# UNDERSTANDING THE PARAMETERS:
+# ============================================================================
+# method = "cv": Standard k-fold cross-validation
+#   - Alternative methods: "repeatedcv" (repeated k-fold), "boot" (bootstrap)
+#   - "LOOCV" (Leave-One-Out CV) for very small datasets
+#
+# number = 5: Number of folds
+#   - k = 5: Good balance between computational cost and reliability
+#   - k = 10: More reliable but slower (default recommendation)
+#   - k = 3: Faster but less reliable
+#
+# ============================================================================
+# ADVANCED CONFIGURATION FOR IMBALANCED DATA
+# ============================================================================
+# NOTE: For imbalanced data and probability-based metrics, consider:
+# train_control <- trainControl(
+#   method = "cv", 
+#   number = 10,
+#   classProbs = TRUE,        # Save class probabilities
+#   summaryFunction = twoClassSummary  # Use ROC-based metrics
+# )
+# ... and then set metric = "ROC" inside train(...).
+```
+
+# Model Training with Cross-Validation
+
+## Logistic Regression (GLM — binomial)
+
+```{r model-logistic}
+# ============================================================================
+# LOGISTIC REGRESSION MODEL TRAINING
+# ============================================================================
+# Logistic regression is a linear model for binary classification
+# It models the probability of belonging to the positive class
+
+# THEORETICAL BACKGROUND:
+# - Uses sigmoid function: P(Y=1) = 1 / (1 + e^(-z)) where z = β₀ + β₁X₁ + ... + βₚXₚ
+# - Assumes linear relationship between predictors and log-odds
+# - Good baseline model, interpretable coefficients
+# - Assumes independence of observations
+
+logistic_model_cv <- train(
+  diabetes ~ .,           # Formula: predict diabetes using all other variables
+  data = df,              # Dataset
+  method = "glm",         # Method: Generalized Linear Model
+  family = "binomial",    # Family: binomial for binary classification
+  trControl = train_control  # Use our cross-validation configuration
+)
+
+# ============================================================================
+# MODEL OUTPUT INTERPRETATION
+# ============================================================================
+# The output shows:
+# - Cross-validation results across all folds
+# - Mean and standard deviation of performance metrics
+# - Best model parameters (if any tuning was done)
+
+logistic_model_cv
+
+# ============================================================================
+# KEY METRICS EXPLANATION:
+# ============================================================================
+# Accuracy: Proportion of correct predictions (TP + TN) / (TP + TN + FP + FN)
+# Kappa: Agreement between predicted and actual, accounting for chance
+#   - Kappa = 0: No agreement beyond chance
+#   - Kappa = 1: Perfect agreement
+#   - Generally: Kappa > 0.6 is considered good
+```
+
+## Decision Tree (rpart)
+
+```{r model-tree}
+# ============================================================================
+# DECISION TREE MODEL TRAINING
+# ============================================================================
+# Decision trees recursively split data based on predictor values
+# Each split creates two child nodes, continuing until stopping criteria
+
+# THEORETICAL BACKGROUND:
+# - Non-parametric method (no assumptions about data distribution)
+# - Creates tree structure with decision rules
+# - Easy to interpret and visualize
+# - Can capture non-linear relationships
+# - Prone to overfitting (hence cross-validation is crucial)
+
+tree_model_cv <- train(
+  diabetes ~ .,           # Predict diabetes using all variables
+  data = df,              # Dataset
+  method = "rpart",       # Method: Recursive Partitioning
+  trControl = train_control,  # Cross-validation configuration
+  tuneLength = 10         # Number of complexity parameter (cp) values to try
+)
+
+# ============================================================================
+# HYPERPARAMETER TUNING EXPLANATION:
+# ============================================================================
+# tuneLength = 10: Tests 10 different values of cp (complexity parameter)
+# cp controls tree complexity:
+#   - cp = 0: Full tree (likely overfitting)
+#   - cp > 0: Pruned tree (reduced complexity)
+#   - Higher cp = simpler tree = less overfitting but potentially underfitting
+
+tree_model_cv
+
+# ============================================================================
+# VISUALIZING TUNING RESULTS
+# ============================================================================
+# Plot shows how model performance changes with different cp values
+# Look for the "elbow" where increasing complexity doesn't improve performance
+plot(tree_model_cv)  # cp vs Accuracy/Kappa
+```
+
+## Random Forest (rf)
+
+```{r model-rf}
+# ============================================================================
+# RANDOM FOREST MODEL TRAINING
+# ============================================================================
+# Random Forest builds multiple decision trees and averages their predictions
+# Each tree is trained on a bootstrap sample with random feature selection
+
+# THEORETICAL BACKGROUND:
+# - Ensemble method (combines multiple models)
+# - Reduces overfitting through averaging
+# - Handles non-linear relationships well
+# - Provides feature importance measures
+# - Generally good performance across many datasets
+# - Less interpretable than single trees
+
+forest_model_cv <- train(
+  diabetes ~ .,           # Predict diabetes using all variables
+  data = df,              # Dataset
+  method = "rf",          # Method: Random Forest
+  trControl = train_control,  # Cross-validation configuration
+  tuneLength = 2,         # Number of mtry values to try
+  importance = TRUE       # Calculate variable importance
+)
+
+# ============================================================================
+# HYPERPARAMETER EXPLANATION:
+# ============================================================================
+# tuneLength = 2: Tests 2 different values of mtry
+# mtry: Number of variables randomly sampled at each split
+#   - mtry = 1: Use only 1 variable per split (like bagging)
+#   - mtry = sqrt(p): Common default (p = number of predictors)
+#   - mtry = p: Use all variables (like single tree)
+
+forest_model_cv
+
+# ============================================================================
+# VISUALIZING TUNING RESULTS
+# ============================================================================
+plot(forest_model_cv)  # mtry vs Accuracy/Kappa
+
+# ============================================================================
+# VARIABLE IMPORTANCE ANALYSIS
+# ============================================================================
+# Shows which variables are most important for predictions
+# Higher values = more important variables
+varImp(forest_model_cv) %>%
+  plot(top = 20)  # Show top 20 most important variables
+```
+
+# Compare Model Performance
+
+```{r compare-models}
+# ============================================================================
+# FAIR MODEL COMPARISON USING IDENTICAL CV FOLDS
+# ============================================================================
+# This is a CRITICAL step for fair comparison!
+# All models are evaluated on exactly the same cross-validation folds
+# This eliminates fold-to-fold variation as a source of differences
+
+# Collect resampled performance across models on identical CV folds
+results <- resamples(list(
+  Logistic = logistic_model_cv,  # Logistic regression
+  Tree     = tree_model_cv,      # Decision tree
+  Forest   = forest_model_cv     # Random forest
+))
+
+# ============================================================================
+# COMPARISON SUMMARY STATISTICS
+# ============================================================================
+# Shows mean, median, min, max, and quartiles for each model
+# Look for:
+# - Which model has highest mean performance
+# - Which model has lowest variance (most consistent)
+# - Whether differences are statistically significant
+
+summary(results)
+```
+
+```{r compare-plots, fig.height=4.5}
+# ============================================================================
+# BOXPLOT COMPARISON
+# ============================================================================
+# Boxplots show the distribution of performance across CV folds
+# - Box: Interquartile range (25th to 75th percentile)
+# - Whiskers: Extend to most extreme non-outlier points
+# - Points: Outliers
+# - Higher boxes = better performance
+# - Smaller boxes = more consistent performance
+
+bwplot(results)   # Boxplots of resampled metrics
+```
+
+```{r compare-dots, fig.height=4.5}
+# ============================================================================
+# DOTPLOT COMPARISON WITH CONFIDENCE INTERVALS
+# ============================================================================
+# Dotplot shows mean performance with confidence intervals
+# - Dots: Mean performance across CV folds
+# - Lines: Confidence intervals
+# - Models with non-overlapping CIs are significantly different
+# - Look for both point estimates and uncertainty
+
+dotplot(results)  # Dots of mean performance with CIs
+```
+
+# (Optional) Use ROC AUC for Imbalanced Data
+
+> **WHEN TO USE ROC AUC INSTEAD OF ACCURACY:**
+>
+> **THEORETICAL BACKGROUND:**
+>
+> **Accuracy Problems with Imbalanced Data:** - If 90% of patients don't
+> have diabetes, a model that predicts "no diabetes" for everyone gets
+> 90% accuracy - This is misleading! The model learned nothing useful
+>
+> **ROC AUC Advantages:** - Measures ability to rank positive cases
+> higher than negative cases - Insensitive to class imbalance - Range:
+> 0.5 (random) to 1.0 (perfect) - 0.7-0.8: Acceptable, 0.8-0.9: Good,
+> \>0.9: Excellent
+>
+> **Tip:** If the positive class is rare (\< 20%), ROC AUC is often more
+> informative than Accuracy.
+
+```{r roc-auc-optional, eval=FALSE}
+# ============================================================================
+# ROC AUC EVALUATION SETUP
+# ============================================================================
+# Ensure positive class is the first factor level
+# This is important for proper ROC calculation
+df$diabetes <- as.factor(df$diabetes)
+df$diabetes <- relevel(df$diabetes, ref = "1")  # Make "1" the reference level
+
+# ============================================================================
+# CROSS-VALIDATION CONFIGURATION FOR ROC
+# ============================================================================
+ctrl_roc <- trainControl(
+  method = "cv", 
+  number = 10,
+  classProbs = TRUE,        # Save predicted probabilities (needed for ROC)
+  summaryFunction = twoClassSummary,  # Use ROC-based metrics
+  savePredictions = "final"  # Save predictions for detailed analysis
+)
+
+# ============================================================================
+# TRAIN MODELS OPTIMIZING ROC AUC
+# ============================================================================
+# Logistic regression with ROC optimization
+logit_roc <- train(
+  diabetes ~ .,
+  data = df,
+  method = "glm",
+  family = binomial(),
+  trControl = ctrl_roc,
+  metric = "ROC"  # Optimize for ROC AUC instead of Accuracy
+)
+
+# Random forest with ROC optimization
+rf_roc <- train(
+  diabetes ~ .,
+  data = df,
+  method = "rf",
+  trControl = ctrl_roc,
+  tuneLength = 5,
+  metric = "ROC"  # Optimize for ROC AUC
+)
+
+# ============================================================================
+# COMPARE ROC PERFORMANCE
+# ============================================================================
+res_roc <- resamples(list(Logistic = logit_roc, Forest = rf_roc))
+summary(res_roc)
+bwplot(res_roc, metric = "ROC")
+```
+
+# Exercises (for students)
+
+## Exercise 1: Understanding Cross-Validation Folds
+
+**Change `number = 10` to `number = 5` and observe how the variance of
+estimates changes. What do you trade off by using fewer or more folds?**
+
+**THEORETICAL CONSIDERATIONS:** - **Fewer folds (k=3-5)**: Faster
+computation, but higher variance in estimates - **More folds
+(k=10-20)**: More reliable estimates, but slower computation - **Rule of
+thumb**: k=10 is often a good compromise
+
+## Exercise 2: Adding Support Vector Machine
+
+**Add an SVM model (`method = "svmRadial"`) and compare against the
+three models above. Which performs best and why?**
+
+**SVM THEORETICAL BACKGROUND:** - Finds optimal hyperplane to separate
+classes - Uses kernel trick for non-linear boundaries - Good for
+high-dimensional data - Sensitive to feature scaling
+
+## Exercise 3: Feature Scaling Impact
+
+**Try standardizing numeric predictors using
+`preProcess = c("center", "scale")` inside `train(...)`. Which models
+benefit most from scaling?**
+
+**SCALING THEORY:** - **Center**: Subtract mean (makes mean = 0) -
+**Scale**: Divide by standard deviation (makes SD = 1) - **Models that
+benefit**: SVM, Neural Networks, KNN - **Models that don't**: Trees,
+Random Forest
+
+## Exercise 4: ROC vs Accuracy Comparison
+
+**(Optional) Switch to ROC-based evaluation as shown above and compare
+conclusions against Accuracy-based evaluation.**
+
+**COMPARISON FRAMEWORK:** - When do results differ? - Which metric is
+more appropriate for your data? - How does class balance affect the
+choice?
+
+# Session Info
+
+```{r session-info}
+# ============================================================================
+# SESSION INFORMATION FOR REPRODUCIBILITY
+# ============================================================================
+# This shows R version, package versions, and system information
+# Important for ensuring reproducible results across different environments
+sessionInfo()
+```
