@@ -147,7 +147,7 @@ pip install pandas numpy
 1. **Clone the repository**:
    ```bash
    git clone [your-repository-url]
-   cd Practical_I
+   cd NIHES-ML-practicals
    ```
 
 2. **Install R packages** (run in R console):
